@@ -1,0 +1,4 @@
+# Compiled binary (install.sh builds it into ~/.local/bin)
+mic-lock
+*.o
+.DS_Store
