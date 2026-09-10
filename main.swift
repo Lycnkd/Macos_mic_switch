@@ -36,6 +36,16 @@ let logFormatter: DateFormatter = {
     return f
 }()
 
+// MARK: - Localization
+
+// The menu is the only user-facing text in the whole program, so a two-column
+// lookup is a better fit than a .lproj bundle inside a one-file tool.
+let prefersChinese = (Locale.preferredLanguages.first ?? "en").hasPrefix("zh")
+
+func t(_ english: String, _ chinese: String) -> String {
+    prefersChinese ? chinese : english
+}
+
 func describeDuration(_ seconds: TimeInterval) -> String {
     let s = Int(seconds.rounded())
     return s < 60 ? "\(s)s" : "\(s / 60)m\(s % 60 == 0 ? "" : "\(s % 60)s")"
@@ -615,9 +625,14 @@ final class Controller: NSObject, NSMenuDelegate {
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "mic-lock")
         button.image?.isTemplate = !deaf || paused
         button.contentTintColor = (deaf && !paused) ? .systemRed : nil
-        var tip = paused ? "mic-lock：已暂停"
-                         : "mic-lock：\(target?.name ?? "无可用设备")" + (deaf ? "（合盖，收不到声音）" : "")
-        if keepWarm.isHolding { tip += "\n会话保活中（下次唤起约 0.4 秒）" }
+        var tip = paused
+            ? t("mic-lock: paused", "mic-lock：已暂停")
+            : t("mic-lock: ", "mic-lock：") + (target?.name ?? t("no usable device", "无可用设备"))
+                + (deaf ? t(" (lid shut — hears nothing)", "（合盖，收不到声音）") : "")
+        if keepWarm.isHolding {
+            tip += t("\nSession held warm — next wake takes about 0.4s",
+                     "\n会话保活中（下次唤起约 0.4 秒）")
+        }
         button.toolTip = tip
     }
 
@@ -627,22 +642,30 @@ final class Controller: NSObject, NSMenuDelegate {
         let (target, fellBack) = resolveTarget(devices)
         let deaf = targetIsDeaf(target)
 
-        let header = NSMenuItem(title: "当前输入：\(target?.name ?? "无")", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(
+            title: t("Current input: ", "当前输入：") + (target?.name ?? t("none", "无")),
+            action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         if deaf {
-            let warn = NSMenuItem(title: "⚠️ 合盖状态，内置麦收不到声音", action: nil, keyEquivalent: "")
+            let warn = NSMenuItem(
+                title: t("⚠️ Lid is shut — the built-in mic hears nothing",
+                         "⚠️ 合盖状态，内置麦收不到声音"),
+                action: nil, keyEquivalent: "")
             warn.isEnabled = false
             menu.addItem(warn)
         }
         if fellBack {
-            let fb = NSMenuItem(title: "↩︎ 锁定的设备不在，已临时回落", action: nil, keyEquivalent: "")
+            let fb = NSMenuItem(
+                title: t("↩︎ Pinned device is away — fallen back for now",
+                         "↩︎ 锁定的设备不在，已临时回落"),
+                action: nil, keyEquivalent: "")
             fb.isEnabled = false
             menu.addItem(fb)
         }
         menu.addItem(.separator())
 
-        let auto = NSMenuItem(title: "自动（跟随盖子状态）",
+        let auto = NSMenuItem(title: t("Auto (follow the lid)", "自动（跟随盖子状态）"),
                               action: #selector(pickAuto), keyEquivalent: "")
         auto.target = self
         auto.state = (pin == .auto) ? .on : .off
@@ -651,10 +674,10 @@ final class Controller: NSObject, NSMenuDelegate {
 
         for device in devices {
             let tag: String
-            if device.isBuiltIn { tag = "内置" }
+            if device.isBuiltIn { tag = t("built-in", "内置") }
             else if device.isContinuity { tag = "Continuity" }
-            else if device.isBluetooth { tag = "蓝牙・不记忆" }
-            else { tag = "外接" }
+            else if device.isBluetooth { tag = t("Bluetooth · not remembered", "蓝牙・不记忆") }
+            else { tag = t("external", "外接") }
             let item = NSMenuItem(title: "\(device.name)  —  \(tag)",
                                   action: #selector(pickDevice(_:)), keyEquivalent: "")
             item.target = self
@@ -668,35 +691,42 @@ final class Controller: NSObject, NSMenuDelegate {
 
         let warmTitle: String
         if !keepWarmEnabled {
-            warmTitle = "会话保活：已关闭"
+            warmTitle = t("Keep-warm: off", "会话保活：已关闭")
         } else if keepWarm.isHolding {
-            let held = Date().timeIntervalSince(warmSince ?? Date())
-            warmTitle = "会话保活：保持中（已 \(describeDuration(held))）"
+            let held = describeDuration(Date().timeIntervalSince(warmSince ?? Date()))
+            warmTitle = t("Keep-warm: holding (\(held))", "会话保活：保持中（已 \(held)）")
         } else if target?.isContinuity == true {
-            warmTitle = "会话保活：待命（首次唤起后启动）"
+            warmTitle = t("Keep-warm: armed (starts after first use)",
+                          "会话保活：待命（首次唤起后启动）")
         } else {
-            warmTitle = "会话保活：当前设备无需保活"
+            warmTitle = t("Keep-warm: not needed for this device",
+                          "会话保活：当前设备无需保活")
         }
         let warmStatus = NSMenuItem(title: warmTitle, action: nil, keyEquivalent: "")
         warmStatus.isEnabled = false
         menu.addItem(warmStatus)
 
-        let warmToggle = NSMenuItem(title: keepWarmEnabled ? "关闭会话保活" : "开启会话保活",
-                                    action: #selector(toggleKeepWarm), keyEquivalent: "")
+        let warmToggle = NSMenuItem(
+            title: keepWarmEnabled ? t("Turn keep-warm off", "关闭会话保活")
+                                   : t("Turn keep-warm on", "开启会话保活"),
+            action: #selector(toggleKeepWarm), keyEquivalent: "")
         warmToggle.target = self
         menu.addItem(warmToggle)
 
         menu.addItem(.separator())
-        let pauseItem = NSMenuItem(title: paused ? "恢复锁定" : "暂停锁定",
-                                   action: #selector(togglePause), keyEquivalent: "")
+        let pauseItem = NSMenuItem(
+            title: paused ? t("Resume pinning", "恢复锁定") : t("Pause pinning", "暂停锁定"),
+            action: #selector(togglePause), keyEquivalent: "")
         pauseItem.target = self
         menu.addItem(pauseItem)
 
-        let settings = NSMenuItem(title: "打开声音设置…", action: #selector(openSettings), keyEquivalent: "")
+        let settings = NSMenuItem(title: t("Open Sound Settings…", "打开声音设置…"),
+                                  action: #selector(openSettings), keyEquivalent: "")
         settings.target = self
         menu.addItem(settings)
 
-        let quit = NSMenuItem(title: "退出（下次登录恢复）", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: t("Quit (back at next login)", "退出（下次登录恢复）"),
+                              action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
     }
