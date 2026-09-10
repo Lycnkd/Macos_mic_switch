@@ -40,7 +40,16 @@ let logFormatter: DateFormatter = {
 
 // The menu is the only user-facing text in the whole program, so a two-column
 // lookup is a better fit than a .lproj bundle inside a one-file tool.
-let prefersChinese = (Locale.preferredLanguages.first ?? "en").hasPrefix("zh")
+let prefersChinese: Bool = {
+    // An explicit choice wins, for people whose preferred-language order does
+    // not match the language they want this menu in:
+    //   defaults write <bundle-id> language zh    (or en)
+    if let forced = UserDefaults.standard.string(forKey: "language")?.lowercased() {
+        if forced.hasPrefix("zh") { return true }
+        if forced.hasPrefix("en") { return false }
+    }
+    return (Locale.preferredLanguages.first ?? "en").hasPrefix("zh")
+}()
 
 func t(_ english: String, _ chinese: String) -> String {
     prefersChinese ? chinese : english

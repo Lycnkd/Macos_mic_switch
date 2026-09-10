@@ -104,6 +104,9 @@ defaults write com.miclock keepWarmEnabled -bool false
 
 # Forget the pinned device and go back to Auto
 defaults delete com.miclock pinnedDeviceUID
+
+# Force the menu language, if your preferred-language order disagrees
+defaults write com.miclock language zh    # or: en
 ```
 
 Reload after editing: `launchctl bootout gui/$(id -u)/com.miclock && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.miclock.plist`
