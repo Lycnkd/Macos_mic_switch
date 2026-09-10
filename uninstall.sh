@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Removes mic-lock and its launchd agent.
+# Removes mic-lock, its launchd agent and its preferences.
 
 set -euo pipefail
 
@@ -16,4 +16,9 @@ rm -f "$HOME/.local/bin/mic-lock" \
       "$HOME/Library/Logs/miclock.log"
 rm -rf "$HOME/.local/share/mic-lock"
 
+echo "==> Removing preferences"
+defaults delete "$LABEL" 2>/dev/null || true
+
 echo "==> mic-lock removed."
+echo "    Its microphone permission entry stays in System Settings > Privacy &"
+echo "    Security > Microphone; remove it there if you want it gone."
