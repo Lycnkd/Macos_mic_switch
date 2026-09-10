@@ -364,6 +364,7 @@ final class Controller: NSObject, NSMenuDelegate {
     private let keepWarm = KeepWarm()
     private var warmSince: Date?
     private var lastSawOthers = Date()
+    private var warmRetries = 0
     private var idleWatch: DispatchSourceTimer?
     private var runningListener: AudioObjectPropertyListenerBlock?
     private var watchedDevice = AudioObjectID(0)
@@ -580,12 +581,26 @@ final class Controller: NSObject, NSMenuDelegate {
         if !keepWarm.isHolding {
             keepWarm.onAccessGranted = { [weak self] in self?.evaluateKeepWarm() }
             if keepWarm.start() {
+                warmRetries = 0
                 warmSince = Date()
                 let who = others.map(processName).joined(separator: ", ")
                 log("keep-warm: holding '\(target.name)' (\(who) started capturing)")
                 startIdleWatch()
                 refreshUI(devices: inputDevices(), target: target)
+            } else {
+                scheduleWarmRetry()
             }
+        }
+    }
+
+    /// A device caught mid-switch reports no usable format, and the capture that
+    /// prompted us may well outlive that moment. Try again shortly rather than
+    /// waiting for whatever event happens to come next.
+    private func scheduleWarmRetry() {
+        guard warmRetries < 4 else { return }
+        warmRetries += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.evaluateKeepWarm()
         }
     }
 
@@ -621,6 +636,7 @@ final class Controller: NSObject, NSMenuDelegate {
         guard keepWarm.isHolding else { return }
         keepWarm.stop()
         warmSince = nil
+        warmRetries = 0
         log("keep-warm: released (\(reason))")
         refreshUI(devices: inputDevices(), target: resolveTarget(inputDevices()).device)
     }
