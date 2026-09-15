@@ -324,7 +324,24 @@ enum Pin: Equatable {
 let continuityToken = "@continuity"
 
 let defaultsKey = "pinnedDeviceUID"
-let keepWarmKey = "keepWarmEnabled"
+let keepWarmKey = "keepWarmEnabled"      // legacy on/off flag, migrated below
+let keepWarmModeKey = "keepWarmMode"
+
+/// How long a Continuity session should be held open.
+enum KeepWarmMode: String {
+    case off                 // never hold
+    case auto                // hold after some app uses the mic, release when idle
+    case always              // hold from the moment the device is pinned, no idle release
+}
+
+func loadKeepWarmMode() -> KeepWarmMode {
+    if let raw = store.string(forKey: keepWarmModeKey), let mode = KeepWarmMode(rawValue: raw) {
+        return mode
+    }
+    // Carry over the boolean this replaced.
+    if let legacy = store.object(forKey: keepWarmKey) as? Bool { return legacy ? .auto : .off }
+    return .auto
+}
 let keepWarmIdleKey = "keepWarmIdleSeconds"
 // The launchd label, the preferences domain and the dispatch queue all follow
 // the bundle identifier, so one source builds for any install prefix.
@@ -368,7 +385,7 @@ final class Controller: NSObject, NSMenuDelegate {
     private var idleWatch: DispatchSourceTimer?
     private var runningListener: AudioObjectPropertyListenerBlock?
     private var watchedDevice = AudioObjectID(0)
-    private var keepWarmEnabled: Bool = (store.object(forKey: keepWarmKey) as? Bool) ?? true
+    private var keepWarmMode: KeepWarmMode = loadKeepWarmMode()
     private var idleTimeout: TimeInterval = {
         let v = store.double(forKey: keepWarmIdleKey)
         return v > 0 ? v : 600   // ten minutes
@@ -419,7 +436,7 @@ final class Controller: NSObject, NSMenuDelegate {
         }
         evaluateKeepWarm()
 
-        log("started; pin=\(describe(pin)), clamshell=\(clamshellClosed()), keep-warm=\(keepWarmEnabled)")
+        log("started; pin=\(describe(pin)), clamshell=\(clamshellClosed()), keep-warm=\(keepWarmMode.rawValue)")
     }
 
     // MARK: Target resolution
@@ -568,11 +585,29 @@ final class Controller: NSObject, NSMenuDelegate {
         let target = resolveTarget(inputDevices()).device
 
         // Only Continuity sessions are expensive enough to be worth holding.
-        guard keepWarmEnabled, !paused, let target = target, target.isContinuity else {
+        guard keepWarmMode != .off, !paused, let target = target, target.isContinuity else {
             releaseHold(reason: "not applicable")
             return
         }
         watchRunningState(of: target.id)
+
+        // "Always" does not wait to be asked and never times out: some stretches
+        // of work run for hours, and no heuristic guesses that well.
+        if keepWarmMode == .always {
+            stopIdleWatch()
+            if !keepWarm.isHolding {
+                keepWarm.onAccessGranted = { [weak self] in self?.evaluateKeepWarm() }
+                if keepWarm.start() {
+                    warmRetries = 0
+                    warmSince = Date()
+                    log("keep-warm: holding '\(target.name)' (always on)")
+                    refreshUI(devices: inputDevices(), target: target)
+                } else {
+                    scheduleWarmRetry()
+                }
+            }
+            return
+        }
 
         let others = otherCapturers()
         guard !others.isEmpty else { return }
@@ -715,14 +750,19 @@ final class Controller: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         let warmTitle: String
-        if !keepWarmEnabled {
+        if keepWarmMode == .off {
             warmTitle = t("Keep-warm: off", "会话保活：已关闭")
         } else if keepWarm.isHolding {
             let held = describeDuration(Date().timeIntervalSince(warmSince ?? Date()))
-            warmTitle = t("Keep-warm: holding (\(held))", "会话保活：保持中（已 \(held)）")
+            warmTitle = keepWarmMode == .always
+                ? t("Keep-warm: holding, always on (\(held))", "会话保活：常开保持中（已 \(held)）")
+                : t("Keep-warm: holding (\(held))", "会话保活：保持中（已 \(held)）")
         } else if target?.isContinuity == true {
-            warmTitle = t("Keep-warm: armed (starts after first use)",
-                          "会话保活：待命（首次唤起后启动）")
+            warmTitle = keepWarmMode == .always
+                ? t("Keep-warm: always on, waiting for the device",
+                    "会话保活：常开，等待设备就绪")
+                : t("Keep-warm: armed (starts after first use)",
+                    "会话保活：待命（首次唤起后启动）")
         } else {
             warmTitle = t("Keep-warm: not needed for this device",
                           "会话保活：当前设备无需保活")
@@ -731,12 +771,26 @@ final class Controller: NSObject, NSMenuDelegate {
         warmStatus.isEnabled = false
         menu.addItem(warmStatus)
 
-        let warmToggle = NSMenuItem(
-            title: keepWarmEnabled ? t("Turn keep-warm off", "关闭会话保活")
-                                   : t("Turn keep-warm on", "开启会话保活"),
-            action: #selector(toggleKeepWarm), keyEquivalent: "")
-        warmToggle.target = self
-        menu.addItem(warmToggle)
+        let idle = describeDuration(idleTimeout)
+        let modes: [(KeepWarmMode, String)] = [
+            (.auto,   t("Automatic — hold after use, release after \(idle) idle",
+                        "自动 — 用过后保持，闲置 \(idle) 后释放")),
+            (.always, t("Always on — hold until switched off",
+                        "常开 — 一直保持，直到手动关闭")),
+            (.off,    t("Off — never open the mic", "关闭 — 完全不打开麦克风")),
+        ]
+        let warmMenu = NSMenu()
+        for (mode, label) in modes {
+            let item = NSMenuItem(title: label, action: #selector(pickKeepWarmMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = (keepWarmMode == mode) ? .on : .off
+            warmMenu.addItem(item)
+        }
+        let warmParent = NSMenuItem(title: t("Keep-warm mode", "会话保活模式"),
+                                    action: nil, keyEquivalent: "")
+        warmParent.submenu = warmMenu
+        menu.addItem(warmParent)
 
         menu.addItem(.separator())
         let pauseItem = NSMenuItem(
@@ -768,11 +822,23 @@ final class Controller: NSObject, NSMenuDelegate {
         select(device)
     }
 
-    @objc private func toggleKeepWarm() {
-        keepWarmEnabled.toggle()
-        store.set(keepWarmEnabled, forKey: keepWarmKey)
-        log("keep-warm: \(keepWarmEnabled ? "enabled" : "disabled")")
-        if keepWarmEnabled { evaluateKeepWarm() } else { releaseHold(reason: "disabled") }
+    @objc private func pickKeepWarmMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = KeepWarmMode(rawValue: raw), mode != keepWarmMode else { return }
+        keepWarmMode = mode
+        store.set(mode.rawValue, forKey: keepWarmModeKey)
+        store.removeObject(forKey: keepWarmKey)
+        log("keep-warm: mode set to \(mode.rawValue)")
+        if mode == .off {
+            releaseHold(reason: "switched off")
+        } else {
+            // Leaving "always" hands the running hold back to the idle timer.
+            if mode == .auto, keepWarm.isHolding {
+                lastSawOthers = Date()
+                startIdleWatch()
+            }
+            evaluateKeepWarm()
+        }
     }
 
     @objc private func togglePause() {

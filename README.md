@@ -24,7 +24,7 @@ Continuity is the natural answer to problem 2, but bringing up the session costs
 - **Bluetooth always bounces.** A headset that grabs the input is sent straight back. You can still pin one deliberately from the menu, but that choice is never remembered and is dropped when the device disconnects.
 - **Graceful fallback.** If the pinned device disappears, the input falls back temporarily and returns to your choice the moment the device is back. Continuity mics are remembered by *kind*, not by UID, because iPhones get a fresh UID on every reconnect.
 - **Dead-mic warning.** If the pinned device cannot actually hear anything (built-in mic, lid shut), the menu-bar icon turns into a red warning triangle.
-- **Session keep-warm.** After some app has used an iPhone mic, `mic-lock` holds the session open itself and lets go only after a long idle stretch — so the *next* app gets it instantly, with no handshake and no headphone stutter.
+- **Session keep-warm**, in three modes. *Automatic* holds the session once some app has used the iPhone mic and lets go after a long idle stretch, so the *next* app gets it instantly with no handshake and no headphone stutter. *Always on* holds it from the moment the device is pinned and never times out, for stretches of work that run for hours. *Off* never opens the mic at all.
 
 ## Measurements
 
@@ -60,7 +60,8 @@ Keep-warm genuinely opens the microphone — that is the entire point, since a s
 - macOS shows the **orange microphone indicator** the whole time it is holding. That indicator is telling you the truth, and nothing here tries to work around it.
 - Captured buffers are **discarded in the tap callback**. Nothing is written anywhere, ever.
 - It only holds sessions for **Continuity devices**, which are the only ones expensive enough to be worth it. Built-in and USB mics are never held open.
-- It releases after **10 minutes** of nobody using the mic, and immediately when you open the lid, pause it, or switch to a non-Continuity device.
+- In *Automatic* mode it releases after **10 minutes** of nobody using the mic, and in every mode it releases immediately when you open the lid, pause it, or switch to a non-Continuity device.
+- *Always on* is the one mode that keeps the mic open indefinitely, and therefore the indicator lit, until you switch it back. Pick it deliberately.
 - Turn it off entirely from the menu, and it will never open the mic at all.
 
 ## Requirements
@@ -87,7 +88,7 @@ The first time keep-warm engages, macOS asks for microphone permission. Decline 
 | **Current input** | The device the input is on right now, plus warnings if it is deaf or if the pinned device is missing |
 | **Auto (follow lid)** | Built-in mic normally; iPhone mic when the lid is shut |
 | *device list* | Pick one to pin it. Bluetooth entries are marked as not remembered |
-| **Keep-warm** | Status line, and a toggle to disable it |
+| **Keep-warm mode** | Status line, plus a submenu: Automatic, Always on, or Off |
 | **Pause** | Stop enforcing entirely, without unloading the agent |
 | **Quit** | Unloads the launchd job too, so `KeepAlive` doesn't just restart it. Comes back at next login |
 
@@ -99,8 +100,8 @@ Stored in the `com.miclock` defaults domain.
 # How long to hold an idle session, in seconds (default 600)
 defaults write com.miclock keepWarmIdleSeconds -float 1800
 
-# Disable keep-warm without using the menu
-defaults write com.miclock keepWarmEnabled -bool false
+# Keep-warm mode: auto (default), always, or off
+defaults write com.miclock keepWarmMode -string always
 
 # Forget the pinned device and go back to Auto
 defaults delete com.miclock pinnedDeviceUID
